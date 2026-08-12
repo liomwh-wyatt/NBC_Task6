@@ -108,13 +108,17 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 	}
 
 	FString CombinedMessageString;
+	bool bIsValidGuess = false;
+	int32 StrikeCount = 0;
 	if (NBPlayerState->CurrentGuessCount >= NBPlayerState->MaxGuessCount)
 	{
 		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": 더 이상 입력할 수 없습니다.");
 	}
 	else if (IsGuessNumberString(InChatMessageString) == true)
 	{
+		bIsValidGuess = true;
 		FString JudgeResultString = JudgeResult(SecretNumberString, InChatMessageString);
+		StrikeCount = FCString::Atoi(*JudgeResultString.Left(1));
 		IncreaseGuessCount(InChattingPlayerController);
 		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
 			+ InChatMessageString + TEXT(" -> ") + JudgeResultString;
@@ -133,6 +137,11 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 			NBPlayerController->ClientRPCPrintChatMessageString(CombinedMessageString);
 		}
 	}
+
+	if (bIsValidGuess == true)
+	{
+		JudgeGame(InChattingPlayerController, StrikeCount);
+	}
 }
 
 void ANBGameModeBase::IncreaseGuessCount(ANBPlayerController* InChattingPlayerController)
@@ -141,6 +150,77 @@ void ANBGameModeBase::IncreaseGuessCount(ANBPlayerController* InChattingPlayerCo
 	if (IsValid(NBPlayerState) == true)
 	{
 		NBPlayerState->CurrentGuessCount++;
+	}
+}
+
+void ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount)
+{
+	if (StrikeCount == 3)
+	{
+		ANBPlayerState* WinnerPlayerState = InChattingPlayerController->GetPlayerState<ANBPlayerState>();
+		if (IsValid(WinnerPlayerState) == true)
+		{
+			FText WinnerText = FText::FromString(WinnerPlayerState->PlayerNameString + TEXT(" 승리!"));
+			for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
+			{
+				if (IsValid(NBPlayerController) == true)
+				{
+					NBPlayerController->NotificationText = WinnerText;
+				}
+			}
+		}
+
+		ResetGame();
+		return;
+	}
+
+	bool bIsDraw = true;
+	for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
+	{
+		if (IsValid(NBPlayerController) == false)
+		{
+			bIsDraw = false;
+			break;
+		}
+
+		ANBPlayerState* NBPlayerState = NBPlayerController->GetPlayerState<ANBPlayerState>();
+		if (IsValid(NBPlayerState) == false
+			|| NBPlayerState->CurrentGuessCount < NBPlayerState->MaxGuessCount)
+		{
+			bIsDraw = false;
+			break;
+		}
+	}
+
+	if (bIsDraw == true)
+	{
+		for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
+		{
+			if (IsValid(NBPlayerController) == true)
+			{
+				NBPlayerController->NotificationText = FText::FromString(TEXT("무승부입니다."));
+			}
+		}
+
+		ResetGame();
+	}
+}
+
+void ANBGameModeBase::ResetGame()
+{
+	SecretNumberString = GenerateSecretNumber();
+	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
+
+	for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
+	{
+		if (IsValid(NBPlayerController) == true)
+		{
+			ANBPlayerState* NBPlayerState = NBPlayerController->GetPlayerState<ANBPlayerState>();
+			if (IsValid(NBPlayerState) == true)
+			{
+				NBPlayerState->CurrentGuessCount = 0;
+			}
+		}
 	}
 }
 
