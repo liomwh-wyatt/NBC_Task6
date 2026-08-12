@@ -1,5 +1,6 @@
 #include "NBGameModeBase.h"
 #include "Player/NBPlayerController.h"
+#include "Player/NBPlayerState.h"
 #include "EngineUtils.h"
 
 void ANBGameModeBase::BeginPlay()
@@ -8,6 +9,23 @@ void ANBGameModeBase::BeginPlay()
 
 	SecretNumberString = GenerateSecretNumber();
 	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
+}
+
+void ANBGameModeBase::OnPostLogin(AController* NewPlayer)
+{
+	Super::OnPostLogin(NewPlayer);
+
+	ANBPlayerController* NBPlayerController = Cast<ANBPlayerController>(NewPlayer);
+	if (IsValid(NBPlayerController) == true)
+	{
+		AllPlayerControllers.Add(NBPlayerController);
+
+		ANBPlayerState* NBPlayerState = NBPlayerController->GetPlayerState<ANBPlayerState>();
+		if (IsValid(NBPlayerState) == true)
+		{
+			NBPlayerState->PlayerNameString = TEXT("Player") + FString::FromInt(AllPlayerControllers.Num());
+		}
+	}
 }
 
 FString ANBGameModeBase::GenerateSecretNumber()
@@ -83,16 +101,28 @@ FString ANBGameModeBase::JudgeResult(const FString& InSecretNumberString, const 
 
 void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlayerController, const FString& InChatMessageString)
 {
-	FString CombinedMessageString = InChatMessageString;
+	ANBPlayerState* NBPlayerState = InChattingPlayerController->GetPlayerState<ANBPlayerState>();
+	if (IsValid(NBPlayerState) == false)
+	{
+		return;
+	}
 
-	if (IsGuessNumberString(InChatMessageString) == true)
+	FString CombinedMessageString;
+	if (NBPlayerState->CurrentGuessCount >= NBPlayerState->MaxGuessCount)
+	{
+		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": 더 이상 입력할 수 없습니다.");
+	}
+	else if (IsGuessNumberString(InChatMessageString) == true)
 	{
 		FString JudgeResultString = JudgeResult(SecretNumberString, InChatMessageString);
-		CombinedMessageString += TEXT(" -> ") + JudgeResultString;
+		IncreaseGuessCount(InChattingPlayerController);
+		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
+			+ InChatMessageString + TEXT(" -> ") + JudgeResultString;
 	}
 	else
 	{
-		CombinedMessageString += TEXT(" -> 다시 입력하세요.");
+		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
+			+ InChatMessageString + TEXT(" -> 다시 입력하세요.");
 	}
 
 	for (TActorIterator<ANBPlayerController> It(GetWorld()); It; ++It)
@@ -102,6 +132,15 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 		{
 			NBPlayerController->ClientRPCPrintChatMessageString(CombinedMessageString);
 		}
+	}
+}
+
+void ANBGameModeBase::IncreaseGuessCount(ANBPlayerController* InChattingPlayerController)
+{
+	ANBPlayerState* NBPlayerState = InChattingPlayerController->GetPlayerState<ANBPlayerState>();
+	if (IsValid(NBPlayerState) == true)
+	{
+		NBPlayerState->CurrentGuessCount++;
 	}
 }
 
