@@ -5,6 +5,7 @@
 #include "NBPlayerController.generated.h"
 
 class UNBChatInput;
+class UUserWidget;
 
 UCLASS()
 class NUMBAS_API ANBPlayerController : public APlayerController
@@ -12,7 +13,10 @@ class NUMBAS_API ANBPlayerController : public APlayerController
 	GENERATED_BODY()
 	
 public:
+	ANBPlayerController();
+
 	virtual void BeginPlay() override;
+	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
 	
 	void SetChatMessageString(const FString& InChatMessageString);
 	void PrintChatMessageString(const FString& InChatMessageString);
@@ -29,6 +33,16 @@ protected:
 	
 	UPROPERTY()
 	TObjectPtr<UNBChatInput> ChatInputWidgetInstance;
+
+	UPROPERTY(EditDefaultsOnly)
+	TSubclassOf<UUserWidget> NotificationTextWidgetClass;
+
+	UPROPERTY()
+	TObjectPtr<UUserWidget> NotificationTextWidgetInstance;
 	
 	FString ChatMessageString;
+
+public:
+	UPROPERTY(Replicated, BlueprintReadOnly)
+	FText NotificationText;
 };

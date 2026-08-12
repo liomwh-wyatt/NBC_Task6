@@ -20,6 +20,8 @@ public:
 	FString JudgeResult(const FString& InSecretNumberString, const FString& InGuessNumberString);
 	void PrintChatMessageString(ANBPlayerController* InChattingPlayerController, const FString& InChatMessageString);
 	void IncreaseGuessCount(ANBPlayerController* InChattingPlayerController);
+	void JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount);
+	void ResetGame();
 
 protected:
 	FString SecretNumberString;
