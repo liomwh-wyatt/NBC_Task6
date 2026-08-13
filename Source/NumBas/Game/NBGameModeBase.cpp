@@ -6,8 +6,11 @@
 
 ANBGameModeBase::ANBGameModeBase()
 	: TurnTimeLimit(15)
+	, GameStartDelay(5)
+	, GameResultDisplayTime(3)
 	, NextPlayerNumber(1)
 	, CurrentTurnPlayerIndex(INDEX_NONE)
+	, RemainingGameStartTime(0)
 	, bHasGuessedThisTurn(false)
 {
 	GameStateClass = ANBGameStateBase::StaticClass();
@@ -17,13 +20,11 @@ void ANBGameModeBase::BeginPlay()
 {
 	Super::BeginPlay();
 
-	SecretNumberString = GenerateSecretNumber();
-	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
-
 	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
 	if (IsValid(NBGameState) == true)
 	{
 		NBGameState->TurnTimeLimit = FMath::Max(TurnTimeLimit, 1);
+		NBGameState->GamePhase = ENBGamePhase::Waiting;
 	}
 
 }
@@ -44,9 +45,15 @@ void ANBGameModeBase::OnPostLogin(AController* NewPlayer)
 			NextPlayerNumber++;
 		}
 
-		if (CurrentTurnPlayerIndex == INDEX_NONE)
+		NBPlayerController->NotificationText = CurrentNotificationText;
+
+		ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+		if (AllPlayerControllers.Num() == 1
+			&& IsValid(NBGameState) == true
+			&& NBGameState->GamePhase == ENBGamePhase::Waiting
+			&& GetWorldTimerManager().IsTimerActive(GameStartTimerHandle) == false)
 		{
-			AdvanceTurn();
+			StartGameCountdown();
 		}
 	}
 }
@@ -65,16 +72,27 @@ void ANBGameModeBase::Logout(AController* Exiting)
 		{
 			CurrentTurnPlayerIndex = INDEX_NONE;
 			GetWorldTimerManager().ClearTimer(TurnTimerHandle);
+			GetWorldTimerManager().ClearTimer(GameStartTimerHandle);
+			GetWorldTimerManager().ClearTimer(GameResetTimerHandle);
+			CurrentNotificationText = FText::GetEmpty();
 
 			ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
 			if (IsValid(NBGameState) == true)
 			{
 				NBGameState->CurrentTurnPlayerName = TEXT("");
 				NBGameState->RemainingTurnTime = 0;
+				NBGameState->GamePhase = ENBGamePhase::Waiting;
 			}
 		}
 		else
 		{
+			ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+			if (IsValid(NBGameState) == false || NBGameState->GamePhase != ENBGamePhase::Playing)
+			{
+				Super::Logout(Exiting);
+				return;
+			}
+
 			if (ExitingPlayerIndex < CurrentTurnPlayerIndex)
 			{
 				CurrentTurnPlayerIndex--;
@@ -173,6 +191,17 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 	}
 
 	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false || NBGameState->GamePhase != ENBGamePhase::Playing)
+	{
+		FString GuideString = TEXT("게임 시작을 준비하고 있습니다.");
+		if (IsValid(NBGameState) == true && NBGameState->GamePhase == ENBGamePhase::Ending)
+		{
+			GuideString = TEXT("게임 결과를 확인하고 있습니다.");
+		}
+		InChattingPlayerController->ClientRPCPrintChatMessageString(TEXT(""), GuideString, false);
+		return;
+	}
+
 	if (GetCurrentTurnPlayer() != InChattingPlayerController
 		|| IsValid(NBGameState) == false
 		|| NBGameState->RemainingTurnTime <= 0)
@@ -182,16 +211,17 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 		{
 			TurnGuideString = TEXT("현재 ") + NBGameState->CurrentTurnPlayerName + TEXT("의 차례입니다.");
 		}
-		InChattingPlayerController->ClientRPCPrintChatMessageString(TurnGuideString);
+		InChattingPlayerController->ClientRPCPrintChatMessageString(TEXT(""), TurnGuideString, false);
 		return;
 	}
 
-	FString CombinedMessageString;
+	FString PlayerInfoString = NBPlayerState->GetPlayerInfoString() + TEXT(":");
+	FString MessageString;
 	bool bIsValidGuess = false;
 	int32 StrikeCount = 0;
 	if (NBPlayerState->CurrentGuessCount >= NBPlayerState->MaxGuessCount)
 	{
-		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": 더 이상 입력할 수 없습니다.");
+		MessageString = TEXT("더 이상 입력할 수 없습니다.");
 	}
 	else if (IsGuessNumberString(InChatMessageString) == true)
 	{
@@ -209,16 +239,15 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 		NBPlayerState->LastBallCount = BallCount;
 		NBPlayerState->bHasLastResult = true;
 		IncreaseGuessCount(InChattingPlayerController);
-		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
-			+ InChatMessageString + TEXT(" -> ") + JudgeResultString;
+		PlayerInfoString = NBPlayerState->GetPlayerInfoString() + TEXT(":");
+		MessageString = InChatMessageString + TEXT(" -> ") + JudgeResultString;
 	}
 	else
 	{
-		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
-			+ InChatMessageString + TEXT(" -> 다시 입력하세요.");
+		MessageString = InChatMessageString + TEXT(" -> 다시 입력하세요.");
 	}
 
-	BroadcastChatMessage(CombinedMessageString);
+	BroadcastChatMessage(InChattingPlayerController, PlayerInfoString, MessageString);
 
 	if (bIsValidGuess == true)
 	{
@@ -241,22 +270,21 @@ void ANBGameModeBase::IncreaseGuessCount(ANBPlayerController* InChattingPlayerCo
 
 bool ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount)
 {
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false || NBGameState->GamePhase != ENBGamePhase::Playing)
+	{
+		return true;
+	}
+
 	if (StrikeCount == 3)
 	{
 		ANBPlayerState* WinnerPlayerState = InChattingPlayerController->GetPlayerState<ANBPlayerState>();
-		if (IsValid(WinnerPlayerState) == true)
+		if (IsValid(WinnerPlayerState) == false)
 		{
-			FText WinnerText = FText::FromString(WinnerPlayerState->PlayerNameString + TEXT(" 승리!"));
-			for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
-			{
-				if (IsValid(NBPlayerController) == true)
-				{
-					NBPlayerController->NotificationText = WinnerText;
-				}
-			}
+			return false;
 		}
 
-		ResetGame();
+		FinishGame(FText::FromString(WinnerPlayerState->PlayerNameString + TEXT(" 승리!")));
 		return true;
 	}
 
@@ -280,25 +308,41 @@ bool ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController,
 
 	if (bIsDraw == true)
 	{
-		for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
-		{
-			if (IsValid(NBPlayerController) == true)
-			{
-				NBPlayerController->NotificationText = FText::FromString(TEXT("무승부입니다."));
-			}
-		}
-
-		ResetGame();
+		FinishGame(FText::FromString(TEXT("무승부입니다.")));
 		return true;
 	}
 
 	return false;
 }
 
+void ANBGameModeBase::FinishGame(const FText& InResultText)
+{
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false)
+	{
+		return;
+	}
+
+	GetWorldTimerManager().ClearTimer(TurnTimerHandle);
+	GetWorldTimerManager().ClearTimer(GameStartTimerHandle);
+	NBGameState->GamePhase = ENBGamePhase::Ending;
+	NBGameState->CurrentTurnPlayerName = TEXT("");
+	NBGameState->RemainingTurnTime = 0;
+	NotifyToAllPlayers(InResultText);
+
+	GetWorldTimerManager().ClearTimer(GameResetTimerHandle);
+	GetWorldTimerManager().SetTimer(
+		GameResetTimerHandle,
+		this,
+		&ThisClass::ResetGame,
+		static_cast<float>(FMath::Max(GameResultDisplayTime, 1)),
+		false
+	);
+}
+
 void ANBGameModeBase::ResetGame()
 {
-	SecretNumberString = GenerateSecretNumber();
-	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
+	GetWorldTimerManager().ClearTimer(GameResetTimerHandle);
 
 	for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
 	{
@@ -317,26 +361,123 @@ void ANBGameModeBase::ResetGame()
 
 	CurrentTurnPlayerIndex = INDEX_NONE;
 	bHasGuessedThisTurn = false;
-	AdvanceTurn();
+	StartGameCountdown();
 }
 
-void ANBGameModeBase::BroadcastChatMessage(const FString& InChatMessageString)
+void ANBGameModeBase::BroadcastChatMessage(
+	ANBPlayerController* InChattingPlayerController,
+	const FString& InPlayerInfoString,
+	const FString& InChatMessageString
+)
 {
 	for (TActorIterator<ANBPlayerController> It(GetWorld()); It; ++It)
 	{
 		ANBPlayerController* NBPlayerController = *It;
 		if (IsValid(NBPlayerController) == true)
 		{
-			NBPlayerController->ClientRPCPrintChatMessageString(InChatMessageString);
+			NBPlayerController->ClientRPCPrintChatMessageString(
+				InPlayerInfoString,
+				InChatMessageString,
+				NBPlayerController == InChattingPlayerController
+			);
 		}
 	}
+}
+
+void ANBGameModeBase::NotifyToAllPlayers(const FText& InNotificationText)
+{
+	CurrentNotificationText = InNotificationText;
+	for (ANBPlayerController* NBPlayerController : AllPlayerControllers)
+	{
+		if (IsValid(NBPlayerController) == true)
+		{
+			NBPlayerController->NotificationText = InNotificationText;
+		}
+	}
+}
+
+void ANBGameModeBase::StartGameCountdown()
+{
+	if (AllPlayerControllers.Num() == 0)
+	{
+		return;
+	}
+
+	GetWorldTimerManager().ClearTimer(TurnTimerHandle);
+	GetWorldTimerManager().ClearTimer(GameStartTimerHandle);
+	CurrentTurnPlayerIndex = INDEX_NONE;
+	bHasGuessedThisTurn = false;
+
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false)
+	{
+		return;
+	}
+
+	NBGameState->GamePhase = ENBGamePhase::Waiting;
+	NBGameState->CurrentTurnPlayerName = TEXT("");
+	NBGameState->RemainingTurnTime = 0;
+	SecretNumberString = GenerateSecretNumber();
+	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
+	RemainingGameStartTime = FMath::Max(GameStartDelay, 0);
+	NotifyToAllPlayers(FText::FromString(TEXT("새 게임 준비")));
+
+	if (RemainingGameStartTime == 0)
+	{
+		StartNewGame();
+		return;
+	}
+
+	GetWorldTimerManager().SetTimer(
+		GameStartTimerHandle,
+		this,
+		&ThisClass::UpdateGameStartCountdown,
+		1.0f,
+		true
+	);
+}
+
+void ANBGameModeBase::UpdateGameStartCountdown()
+{
+	RemainingGameStartTime--;
+	if (RemainingGameStartTime <= 0)
+	{
+		GetWorldTimerManager().ClearTimer(GameStartTimerHandle);
+		StartNewGame();
+		return;
+	}
+
+	if (RemainingGameStartTime <= 3)
+	{
+		NotifyToAllPlayers(FText::AsNumber(RemainingGameStartTime));
+	}
+}
+
+void ANBGameModeBase::StartNewGame()
+{
+	if (AllPlayerControllers.Num() == 0)
+	{
+		return;
+	}
+
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false)
+	{
+		return;
+	}
+
+	NBGameState->GamePhase = ENBGamePhase::Playing;
+	CurrentTurnPlayerIndex = INDEX_NONE;
+	AdvanceTurn();
 }
 
 void ANBGameModeBase::StartTurn()
 {
 	ANBPlayerController* CurrentTurnPlayer = GetCurrentTurnPlayer();
 	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
-	if (IsValid(CurrentTurnPlayer) == false || IsValid(NBGameState) == false)
+	if (IsValid(CurrentTurnPlayer) == false
+		|| IsValid(NBGameState) == false
+		|| NBGameState->GamePhase != ENBGamePhase::Playing)
 	{
 		return;
 	}
@@ -351,6 +492,7 @@ void ANBGameModeBase::StartTurn()
 	NBGameState->CurrentTurnPlayerName = NBPlayerState->PlayerNameString;
 	NBGameState->TurnTimeLimit = FMath::Max(TurnTimeLimit, 1);
 	NBGameState->RemainingTurnTime = NBGameState->TurnTimeLimit;
+	NotifyToAllPlayers(FText::FromString(NBPlayerState->PlayerNameString + TEXT("의 차례입니다.")));
 
 	GetWorldTimerManager().ClearTimer(TurnTimerHandle);
 	GetWorldTimerManager().SetTimer(
@@ -364,7 +506,10 @@ void ANBGameModeBase::StartTurn()
 
 void ANBGameModeBase::AdvanceTurn()
 {
-	if (AllPlayerControllers.Num() == 0)
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (AllPlayerControllers.Num() == 0
+		|| IsValid(NBGameState) == false
+		|| NBGameState->GamePhase != ENBGamePhase::Playing)
 	{
 		return;
 	}
@@ -389,7 +534,6 @@ void ANBGameModeBase::AdvanceTurn()
 	}
 
 	CurrentTurnPlayerIndex = INDEX_NONE;
-	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
 	if (IsValid(NBGameState) == true)
 	{
 		NBGameState->CurrentTurnPlayerName = TEXT("");
@@ -400,8 +544,9 @@ void ANBGameModeBase::AdvanceTurn()
 void ANBGameModeBase::UpdateTurnTimer()
 {
 	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
-	if (IsValid(NBGameState) == false)
+	if (IsValid(NBGameState) == false || NBGameState->GamePhase != ENBGamePhase::Playing)
 	{
+		GetWorldTimerManager().ClearTimer(TurnTimerHandle);
 		return;
 	}
 
@@ -422,6 +567,12 @@ void ANBGameModeBase::UpdateTurnTimer()
 
 void ANBGameModeBase::HandleTurnTimeOut()
 {
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false || NBGameState->GamePhase != ENBGamePhase::Playing)
+	{
+		return;
+	}
+
 	ANBPlayerController* CurrentTurnPlayer = GetCurrentTurnPlayer();
 	if (IsValid(CurrentTurnPlayer) == false || bHasGuessedThisTurn == true)
 	{
@@ -436,7 +587,9 @@ void ANBGameModeBase::HandleTurnTimeOut()
 
 	IncreaseGuessCount(CurrentTurnPlayer);
 	BroadcastChatMessage(
-		NBPlayerState->GetPlayerInfoString() + TEXT(": 시간 초과 -> 기회 1회 소진")
+		CurrentTurnPlayer,
+		NBPlayerState->GetPlayerInfoString() + TEXT(":"),
+		TEXT("시간 초과 -> 기회 1회 소진")
 	);
 
 	const bool bGameEnded = JudgeGame(CurrentTurnPlayer, 0);

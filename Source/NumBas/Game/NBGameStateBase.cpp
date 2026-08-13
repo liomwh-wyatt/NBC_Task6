@@ -5,6 +5,7 @@ ANBGameStateBase::ANBGameStateBase()
 	: CurrentTurnPlayerName(TEXT(""))
 	, RemainingTurnTime(0)
 	, TurnTimeLimit(15)
+	, GamePhase(ENBGamePhase::Waiting)
 {
 	bReplicates = true;
 }
@@ -16,4 +17,5 @@ void ANBGameStateBase::GetLifetimeReplicatedProps(TArray<class FLifetimeProperty
 	DOREPLIFETIME(ThisClass, CurrentTurnPlayerName);
 	DOREPLIFETIME(ThisClass, RemainingTurnTime);
 	DOREPLIFETIME(ThisClass, TurnTimeLimit);
+	DOREPLIFETIME(ThisClass, GamePhase);
 }

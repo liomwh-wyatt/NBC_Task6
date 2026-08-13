@@ -34,14 +34,75 @@ void UNBGameHUD::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	UpdateGameInfo();
 }
 
-void UNBGameHUD::AddChatMessage(const FString& InChatMessageString)
+void UNBGameHUD::AddChatMessage(
+	const FString& InPlayerInfoString,
+	const FString& InChatMessageString,
+	bool bIsOwnMessage
+)
 {
 	FNBChatMessageData ChatMessageData;
+	ChatMessageData.PlayerInfoString = InPlayerInfoString;
 	ChatMessageData.MessageString = InChatMessageString;
 	ChatMessageData.ExpireTime = GetWorld()->GetTimeSeconds() + 60.0f;
+	ChatMessageData.bIsOwnMessage = bIsOwnMessage;
 	ChatMessages.Add(ChatMessageData);
 
 	UpdateChatMessageText();
+}
+
+void UNBGameHUD::RemoveExpiredChatMessages()
+{
+	const float CurrentTime = GetWorld()->GetTimeSeconds();
+	const int32 RemovedMessageCount = ChatMessages.RemoveAll(
+		[CurrentTime](const FNBChatMessageData& ChatMessageData)
+		{
+			return ChatMessageData.ExpireTime <= CurrentTime;
+		}
+	);
+
+	if (RemovedMessageCount > 0)
+	{
+		UpdateChatMessageText();
+	}
+}
+
+void UNBGameHUD::UpdateChatMessageText()
+{
+	FString CombinedAllPlayerInfoString;
+	FString CombinedOwnPlayerInfoString;
+	FString CombinedOtherPlayerInfoString;
+	FString CombinedMessageString;
+	for (int32 i = ChatMessages.Num() - 1; i >= 0; --i)
+	{
+		CombinedAllPlayerInfoString.Append(ChatMessages[i].PlayerInfoString);
+		if (ChatMessages[i].bIsOwnMessage == true)
+		{
+			CombinedOwnPlayerInfoString.Append(ChatMessages[i].PlayerInfoString);
+		}
+		else
+		{
+			CombinedOtherPlayerInfoString.Append(ChatMessages[i].PlayerInfoString);
+		}
+		CombinedMessageString.Append(ChatMessages[i].MessageString);
+		if (i > 0)
+		{
+			CombinedAllPlayerInfoString.Append(TEXT("\n"));
+			CombinedOwnPlayerInfoString.Append(TEXT("\n"));
+			CombinedOtherPlayerInfoString.Append(TEXT("\n"));
+			CombinedMessageString.Append(TEXT("\n"));
+		}
+	}
+
+	if (IsValid(TextBlock_ChatOwnPlayerInfos) == true)
+	{
+		TextBlock_ChatOwnPlayerInfos->SetText(FText::FromString(CombinedOwnPlayerInfoString));
+		TextBlock_ChatPlayerInfos->SetText(FText::FromString(CombinedOtherPlayerInfoString));
+	}
+	else
+	{
+		TextBlock_ChatPlayerInfos->SetText(FText::FromString(CombinedAllPlayerInfoString));
+	}
+	TextBlock_ChatMessages->SetText(FText::FromString(CombinedMessageString));
 }
 
 void UNBGameHUD::UpdateGameInfo()
@@ -83,12 +144,23 @@ void UNBGameHUD::UpdateGameInfo()
 	ANBGameStateBase* NBGameState = GetWorld()->GetGameState<ANBGameStateBase>();
 	if (IsValid(NBGameState) == true)
 	{
-		TextBlock_CurrentTurn->SetText(FText::FromString(
-			NBGameState->CurrentTurnPlayerName + TEXT(" 차례")
-		));
-		TextBlock_RemainingTime->SetText(FText::FromString(
-			FString::FromInt(NBGameState->RemainingTurnTime) + TEXT("초")
-		));
+		if (NBGameState->GamePhase == ENBGamePhase::Playing)
+		{
+			TextBlock_CurrentTurn->SetText(FText::FromString(
+				NBGameState->CurrentTurnPlayerName + TEXT(" 차례")
+			));
+			TextBlock_RemainingTime->SetText(FText::FromString(
+				FString::FromInt(NBGameState->RemainingTurnTime) + TEXT("초")
+			));
+		}
+		else
+		{
+			TextBlock_CurrentTurn->SetText(FText::FromString(
+				NBGameState->GamePhase == ENBGamePhase::Waiting
+					? TEXT("게임 준비") : TEXT("게임 결과")
+			));
+			TextBlock_RemainingTime->SetText(FText::GetEmpty());
+		}
 
 		float RemainingTimePercent = 0.0f;
 		if (NBGameState->TurnTimeLimit > 0)
@@ -98,35 +170,4 @@ void UNBGameHUD::UpdateGameInfo()
 		}
 		ProgressBar_RemainingTime->SetPercent(FMath::Clamp(RemainingTimePercent, 0.0f, 1.0f));
 	}
-}
-
-void UNBGameHUD::RemoveExpiredChatMessages()
-{
-	const float CurrentTime = GetWorld()->GetTimeSeconds();
-	const int32 RemovedMessageCount = ChatMessages.RemoveAll(
-		[CurrentTime](const FNBChatMessageData& ChatMessageData)
-		{
-			return ChatMessageData.ExpireTime <= CurrentTime;
-		}
-	);
-
-	if (RemovedMessageCount > 0)
-	{
-		UpdateChatMessageText();
-	}
-}
-
-void UNBGameHUD::UpdateChatMessageText()
-{
-	FString CombinedMessageString;
-	for (int32 i = ChatMessages.Num() - 1; i >= 0; --i)
-	{
-		CombinedMessageString.Append(ChatMessages[i].MessageString);
-		if (i > 0)
-		{
-			CombinedMessageString.Append(TEXT("\n"));
-		}
-	}
-
-	TextBlock_ChatMessages->SetText(FText::FromString(CombinedMessageString));
 }

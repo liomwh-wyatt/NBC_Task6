@@ -24,8 +24,17 @@ public:
 	void PrintChatMessageString(ANBPlayerController* InChattingPlayerController, const FString& InChatMessageString);
 	void IncreaseGuessCount(ANBPlayerController* InChattingPlayerController);
 	bool JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount);
+	void FinishGame(const FText& InResultText);
 	void ResetGame();
-	void BroadcastChatMessage(const FString& InChatMessageString);
+	void BroadcastChatMessage(
+		ANBPlayerController* InChattingPlayerController,
+		const FString& InPlayerInfoString,
+		const FString& InChatMessageString
+	);
+	void NotifyToAllPlayers(const FText& InNotificationText);
+	void StartGameCountdown();
+	void UpdateGameStartCountdown();
+	void StartNewGame();
 	void StartTurn();
 	void AdvanceTurn();
 	void UpdateTurnTimer();
@@ -39,8 +48,18 @@ protected:
 	UPROPERTY(EditDefaultsOnly)
 	int32 TurnTimeLimit;
 
+	UPROPERTY(EditDefaultsOnly)
+	int32 GameStartDelay;
+
+	UPROPERTY(EditDefaultsOnly)
+	int32 GameResultDisplayTime;
+
 	int32 NextPlayerNumber;
 	int32 CurrentTurnPlayerIndex;
+	int32 RemainingGameStartTime;
 	bool bHasGuessedThisTurn;
+	FText CurrentNotificationText;
 	FTimerHandle TurnTimerHandle;
+	FTimerHandle GameStartTimerHandle;
+	FTimerHandle GameResetTimerHandle;
 };

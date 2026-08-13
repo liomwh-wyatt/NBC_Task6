@@ -69,17 +69,25 @@ void ANBPlayerController::SetChatMessageString(const FString& InChatMessageStrin
 	}
 }
 
-void ANBPlayerController::PrintChatMessageString(const FString& InChatMessageString)
+void ANBPlayerController::PrintChatMessageString(
+	const FString& InPlayerInfoString,
+	const FString& InChatMessageString,
+	bool bIsOwnMessage
+)
 {
 	if (IsValid(GameHUDWidgetInstance) == true)
 	{
-		GameHUDWidgetInstance->AddChatMessage(InChatMessageString);
+		GameHUDWidgetInstance->AddChatMessage(InPlayerInfoString, InChatMessageString, bIsOwnMessage);
 	}
 }
 
-void ANBPlayerController::ClientRPCPrintChatMessageString_Implementation(const FString& InChatMessageString)
+void ANBPlayerController::ClientRPCPrintChatMessageString_Implementation(
+	const FString& InPlayerInfoString,
+	const FString& InChatMessageString,
+	bool bIsOwnMessage
+)
 {
-	PrintChatMessageString(InChatMessageString);
+	PrintChatMessageString(InPlayerInfoString, InChatMessageString, bIsOwnMessage);
 }
 
 void ANBPlayerController::ServerRPCPrintChatMessageString_Implementation(const FString& InChatMessageString)

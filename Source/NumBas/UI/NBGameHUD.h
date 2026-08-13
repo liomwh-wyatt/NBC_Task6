@@ -9,8 +9,10 @@ class UTextBlock;
 
 struct FNBChatMessageData
 {
+	FString PlayerInfoString;
 	FString MessageString;
 	float ExpireTime;
+	bool bIsOwnMessage;
 };
 
 UCLASS()
@@ -23,7 +25,11 @@ public:
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	void AddChatMessage(const FString& InChatMessageString);
+	void AddChatMessage(
+		const FString& InPlayerInfoString,
+		const FString& InChatMessageString,
+		bool bIsOwnMessage
+	);
 
 protected:
 	void UpdateGameInfo();
@@ -54,6 +60,12 @@ public:
 
 	UPROPERTY(meta=(BindWidget))
 	TObjectPtr<UProgressBar> ProgressBar_RemainingTime;
+
+	UPROPERTY(meta=(BindWidget))
+	TObjectPtr<UTextBlock> TextBlock_ChatPlayerInfos;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> TextBlock_ChatOwnPlayerInfos;
 
 	UPROPERTY(meta=(BindWidget))
 	TObjectPtr<UTextBlock> TextBlock_ChatMessages;
