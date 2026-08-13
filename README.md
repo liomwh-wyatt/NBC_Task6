@@ -24,8 +24,7 @@ Unreal Engine C++로 구현한 멀티플레이어 숫자 야구 과제 프로젝
 ## 개발 환경
 
 - Unreal Engine 5.7
-- Visual Studio 2022
-- Windows 64-bit
+- JetBrains Rider 2026.1
 
 ## 실행
 
