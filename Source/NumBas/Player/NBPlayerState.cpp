@@ -5,6 +5,9 @@ ANBPlayerState::ANBPlayerState()
 	: PlayerNameString(TEXT("None"))
 	, CurrentGuessCount(0)
 	, MaxGuessCount(3)
+	, LastStrikeCount(0)
+	, LastBallCount(0)
+	, bHasLastResult(false)
 {
 	bReplicates = true;
 }
@@ -16,6 +19,9 @@ void ANBPlayerState::GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>&
 	DOREPLIFETIME(ThisClass, PlayerNameString);
 	DOREPLIFETIME(ThisClass, CurrentGuessCount);
 	DOREPLIFETIME(ThisClass, MaxGuessCount);
+	DOREPLIFETIME(ThisClass, LastStrikeCount);
+	DOREPLIFETIME(ThisClass, LastBallCount);
+	DOREPLIFETIME(ThisClass, bHasLastResult);
 }
 
 FString ANBPlayerState::GetPlayerInfoString()
