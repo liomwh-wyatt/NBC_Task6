@@ -5,6 +5,7 @@
 #include "NBPlayerController.generated.h"
 
 class UNBChatInput;
+class UNBGameHUD;
 class UUserWidget;
 
 UCLASS()
@@ -33,6 +34,12 @@ protected:
 	
 	UPROPERTY()
 	TObjectPtr<UNBChatInput> ChatInputWidgetInstance;
+
+	UPROPERTY(EditDefaultsOnly)
+	TSubclassOf<UNBGameHUD> GameHUDWidgetClass;
+
+	UPROPERTY()
+	TObjectPtr<UNBGameHUD> GameHUDWidgetInstance;
 
 	UPROPERTY(EditDefaultsOnly)
 	TSubclassOf<UUserWidget> NotificationTextWidgetClass;

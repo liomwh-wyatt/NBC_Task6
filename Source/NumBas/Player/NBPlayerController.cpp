@@ -1,9 +1,9 @@
 #include "NBPlayerController.h"
 #include "Game/NBGameModeBase.h"
 #include "UI/NBChatInput.h"
+#include "UI/NBGameHUD.h"
 #include "Blueprint/UserWidget.h"
 #include "Kismet/GameplayStatics.h"
-#include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 
 ANBPlayerController::ANBPlayerController()
@@ -20,8 +20,14 @@ void ANBPlayerController::BeginPlay()
 		return;
 	}
 	
-	FInputModeUIOnly InputModeUIOnly;
-	SetInputMode(InputModeUIOnly);
+	if (IsValid(GameHUDWidgetClass) == true)
+	{
+		GameHUDWidgetInstance = CreateWidget<UNBGameHUD>(this, GameHUDWidgetClass);
+		if (IsValid(GameHUDWidgetInstance) == true)
+		{
+			GameHUDWidgetInstance->AddToViewport();
+		}
+	}
 	
 	if (IsValid(ChatInputWidgetClass) == true)
 	{
@@ -40,6 +46,10 @@ void ANBPlayerController::BeginPlay()
 			NotificationTextWidgetInstance->AddToViewport();
 		}
 	}
+
+	FInputModeUIOnly InputModeUIOnly;
+	SetInputMode(InputModeUIOnly);
+	bShowMouseCursor = true;
 }
 
 void ANBPlayerController::GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const
@@ -61,7 +71,10 @@ void ANBPlayerController::SetChatMessageString(const FString& InChatMessageStrin
 
 void ANBPlayerController::PrintChatMessageString(const FString& InChatMessageString)
 {
-	UKismetSystemLibrary::PrintString(this, InChatMessageString, true, true, FLinearColor::Red, 5.0f);
+	if (IsValid(GameHUDWidgetInstance) == true)
+	{
+		GameHUDWidgetInstance->AddChatMessage(InChatMessageString);
+	}
 }
 
 void ANBPlayerController::ClientRPCPrintChatMessageString_Implementation(const FString& InChatMessageString)

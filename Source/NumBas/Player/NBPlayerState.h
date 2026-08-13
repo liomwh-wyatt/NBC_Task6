@@ -25,4 +25,13 @@ public:
 
 	UPROPERTY(Replicated)
 	int32 MaxGuessCount;
+
+	UPROPERTY(Replicated)
+	int32 LastStrikeCount;
+
+	UPROPERTY(Replicated)
+	int32 LastBallCount;
+
+	UPROPERTY(Replicated)
+	bool bHasLastResult;
 };

@@ -1,7 +1,17 @@
 #include "NBGameModeBase.h"
+#include "NBGameStateBase.h"
 #include "Player/NBPlayerController.h"
 #include "Player/NBPlayerState.h"
 #include "EngineUtils.h"
+
+ANBGameModeBase::ANBGameModeBase()
+	: TurnTimeLimit(15)
+	, NextPlayerNumber(1)
+	, CurrentTurnPlayerIndex(INDEX_NONE)
+	, bHasGuessedThisTurn(false)
+{
+	GameStateClass = ANBGameStateBase::StaticClass();
+}
 
 void ANBGameModeBase::BeginPlay()
 {
@@ -9,6 +19,13 @@ void ANBGameModeBase::BeginPlay()
 
 	SecretNumberString = GenerateSecretNumber();
 	UE_LOG(LogTemp, Warning, TEXT("Secret Number: %s"), *SecretNumberString);
+
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == true)
+	{
+		NBGameState->TurnTimeLimit = FMath::Max(TurnTimeLimit, 1);
+	}
+
 }
 
 void ANBGameModeBase::OnPostLogin(AController* NewPlayer)
@@ -23,9 +40,57 @@ void ANBGameModeBase::OnPostLogin(AController* NewPlayer)
 		ANBPlayerState* NBPlayerState = NBPlayerController->GetPlayerState<ANBPlayerState>();
 		if (IsValid(NBPlayerState) == true)
 		{
-			NBPlayerState->PlayerNameString = TEXT("Player") + FString::FromInt(AllPlayerControllers.Num());
+			NBPlayerState->PlayerNameString = TEXT("Player") + FString::FromInt(NextPlayerNumber);
+			NextPlayerNumber++;
+		}
+
+		if (CurrentTurnPlayerIndex == INDEX_NONE)
+		{
+			AdvanceTurn();
 		}
 	}
+}
+
+void ANBGameModeBase::Logout(AController* Exiting)
+{
+	ANBPlayerController* ExitingPlayerController = Cast<ANBPlayerController>(Exiting);
+	const int32 ExitingPlayerIndex = AllPlayerControllers.IndexOfByKey(ExitingPlayerController);
+	const bool bWasCurrentTurnPlayer = ExitingPlayerIndex == CurrentTurnPlayerIndex;
+
+	if (ExitingPlayerIndex != INDEX_NONE)
+	{
+		AllPlayerControllers.RemoveAt(ExitingPlayerIndex);
+
+		if (AllPlayerControllers.Num() == 0)
+		{
+			CurrentTurnPlayerIndex = INDEX_NONE;
+			GetWorldTimerManager().ClearTimer(TurnTimerHandle);
+
+			ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+			if (IsValid(NBGameState) == true)
+			{
+				NBGameState->CurrentTurnPlayerName = TEXT("");
+				NBGameState->RemainingTurnTime = 0;
+			}
+		}
+		else
+		{
+			if (ExitingPlayerIndex < CurrentTurnPlayerIndex)
+			{
+				CurrentTurnPlayerIndex--;
+			}
+
+			ANBPlayerController* RemainingPlayerController = AllPlayerControllers[0];
+			const bool bGameEnded = JudgeGame(RemainingPlayerController, 0);
+			if (bGameEnded == false && bWasCurrentTurnPlayer == true)
+			{
+				CurrentTurnPlayerIndex = ExitingPlayerIndex - 1;
+				AdvanceTurn();
+			}
+		}
+	}
+
+	Super::Logout(Exiting);
 }
 
 FString ANBGameModeBase::GenerateSecretNumber()
@@ -107,6 +172,20 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 		return;
 	}
 
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (GetCurrentTurnPlayer() != InChattingPlayerController
+		|| IsValid(NBGameState) == false
+		|| NBGameState->RemainingTurnTime <= 0)
+	{
+		FString TurnGuideString = TEXT("지금은 입력할 수 없습니다.");
+		if (IsValid(NBGameState) == true && NBGameState->CurrentTurnPlayerName.IsEmpty() == false)
+		{
+			TurnGuideString = TEXT("현재 ") + NBGameState->CurrentTurnPlayerName + TEXT("의 차례입니다.");
+		}
+		InChattingPlayerController->ClientRPCPrintChatMessageString(TurnGuideString);
+		return;
+	}
+
 	FString CombinedMessageString;
 	bool bIsValidGuess = false;
 	int32 StrikeCount = 0;
@@ -117,8 +196,18 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 	else if (IsGuessNumberString(InChatMessageString) == true)
 	{
 		bIsValidGuess = true;
+		bHasGuessedThisTurn = true;
 		FString JudgeResultString = JudgeResult(SecretNumberString, InChatMessageString);
-		StrikeCount = FCString::Atoi(*JudgeResultString.Left(1));
+		int32 BallCount = 0;
+		if (JudgeResultString != TEXT("OUT"))
+		{
+			StrikeCount = FCString::Atoi(*JudgeResultString.Left(1));
+			BallCount = FCString::Atoi(*JudgeResultString.Mid(2, 1));
+		}
+
+		NBPlayerState->LastStrikeCount = StrikeCount;
+		NBPlayerState->LastBallCount = BallCount;
+		NBPlayerState->bHasLastResult = true;
 		IncreaseGuessCount(InChattingPlayerController);
 		CombinedMessageString = NBPlayerState->GetPlayerInfoString() + TEXT(": ")
 			+ InChatMessageString + TEXT(" -> ") + JudgeResultString;
@@ -129,18 +218,15 @@ void ANBGameModeBase::PrintChatMessageString(ANBPlayerController* InChattingPlay
 			+ InChatMessageString + TEXT(" -> 다시 입력하세요.");
 	}
 
-	for (TActorIterator<ANBPlayerController> It(GetWorld()); It; ++It)
-	{
-		ANBPlayerController* NBPlayerController = *It;
-		if (IsValid(NBPlayerController) == true)
-		{
-			NBPlayerController->ClientRPCPrintChatMessageString(CombinedMessageString);
-		}
-	}
+	BroadcastChatMessage(CombinedMessageString);
 
 	if (bIsValidGuess == true)
 	{
-		JudgeGame(InChattingPlayerController, StrikeCount);
+		const bool bGameEnded = JudgeGame(InChattingPlayerController, StrikeCount);
+		if (bGameEnded == false)
+		{
+			AdvanceTurn();
+		}
 	}
 }
 
@@ -153,7 +239,7 @@ void ANBGameModeBase::IncreaseGuessCount(ANBPlayerController* InChattingPlayerCo
 	}
 }
 
-void ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount)
+bool ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController, int32 StrikeCount)
 {
 	if (StrikeCount == 3)
 	{
@@ -171,7 +257,7 @@ void ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController,
 		}
 
 		ResetGame();
-		return;
+		return true;
 	}
 
 	bool bIsDraw = true;
@@ -203,7 +289,10 @@ void ANBGameModeBase::JudgeGame(ANBPlayerController* InChattingPlayerController,
 		}
 
 		ResetGame();
+		return true;
 	}
+
+	return false;
 }
 
 void ANBGameModeBase::ResetGame()
@@ -219,8 +308,151 @@ void ANBGameModeBase::ResetGame()
 			if (IsValid(NBPlayerState) == true)
 			{
 				NBPlayerState->CurrentGuessCount = 0;
+				NBPlayerState->LastStrikeCount = 0;
+				NBPlayerState->LastBallCount = 0;
+				NBPlayerState->bHasLastResult = false;
 			}
 		}
 	}
+
+	CurrentTurnPlayerIndex = INDEX_NONE;
+	bHasGuessedThisTurn = false;
+	AdvanceTurn();
+}
+
+void ANBGameModeBase::BroadcastChatMessage(const FString& InChatMessageString)
+{
+	for (TActorIterator<ANBPlayerController> It(GetWorld()); It; ++It)
+	{
+		ANBPlayerController* NBPlayerController = *It;
+		if (IsValid(NBPlayerController) == true)
+		{
+			NBPlayerController->ClientRPCPrintChatMessageString(InChatMessageString);
+		}
+	}
+}
+
+void ANBGameModeBase::StartTurn()
+{
+	ANBPlayerController* CurrentTurnPlayer = GetCurrentTurnPlayer();
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(CurrentTurnPlayer) == false || IsValid(NBGameState) == false)
+	{
+		return;
+	}
+
+	ANBPlayerState* NBPlayerState = CurrentTurnPlayer->GetPlayerState<ANBPlayerState>();
+	if (IsValid(NBPlayerState) == false)
+	{
+		return;
+	}
+
+	bHasGuessedThisTurn = false;
+	NBGameState->CurrentTurnPlayerName = NBPlayerState->PlayerNameString;
+	NBGameState->TurnTimeLimit = FMath::Max(TurnTimeLimit, 1);
+	NBGameState->RemainingTurnTime = NBGameState->TurnTimeLimit;
+
+	GetWorldTimerManager().ClearTimer(TurnTimerHandle);
+	GetWorldTimerManager().SetTimer(
+		TurnTimerHandle,
+		this,
+		&ThisClass::UpdateTurnTimer,
+		1.0f,
+		true
+	);
+}
+
+void ANBGameModeBase::AdvanceTurn()
+{
+	if (AllPlayerControllers.Num() == 0)
+	{
+		return;
+	}
+
+	for (int32 Offset = 1; Offset <= AllPlayerControllers.Num(); ++Offset)
+	{
+		const int32 NextPlayerIndex = (CurrentTurnPlayerIndex + Offset) % AllPlayerControllers.Num();
+		ANBPlayerController* NextPlayerController = AllPlayerControllers[NextPlayerIndex];
+		if (IsValid(NextPlayerController) == false)
+		{
+			continue;
+		}
+
+		ANBPlayerState* NBPlayerState = NextPlayerController->GetPlayerState<ANBPlayerState>();
+		if (IsValid(NBPlayerState) == true
+			&& NBPlayerState->CurrentGuessCount < NBPlayerState->MaxGuessCount)
+		{
+			CurrentTurnPlayerIndex = NextPlayerIndex;
+			StartTurn();
+			return;
+		}
+	}
+
+	CurrentTurnPlayerIndex = INDEX_NONE;
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == true)
+	{
+		NBGameState->CurrentTurnPlayerName = TEXT("");
+		NBGameState->RemainingTurnTime = 0;
+	}
+}
+
+void ANBGameModeBase::UpdateTurnTimer()
+{
+	ANBGameStateBase* NBGameState = GetGameState<ANBGameStateBase>();
+	if (IsValid(NBGameState) == false)
+	{
+		return;
+	}
+
+	ANBPlayerController* CurrentTurnPlayer = GetCurrentTurnPlayer();
+	if (IsValid(CurrentTurnPlayer) == false)
+	{
+		AdvanceTurn();
+		return;
+	}
+
+	NBGameState->RemainingTurnTime--;
+	if (NBGameState->RemainingTurnTime <= 0)
+	{
+		NBGameState->RemainingTurnTime = 0;
+		HandleTurnTimeOut();
+	}
+}
+
+void ANBGameModeBase::HandleTurnTimeOut()
+{
+	ANBPlayerController* CurrentTurnPlayer = GetCurrentTurnPlayer();
+	if (IsValid(CurrentTurnPlayer) == false || bHasGuessedThisTurn == true)
+	{
+		return;
+	}
+
+	ANBPlayerState* NBPlayerState = CurrentTurnPlayer->GetPlayerState<ANBPlayerState>();
+	if (IsValid(NBPlayerState) == false)
+	{
+		return;
+	}
+
+	IncreaseGuessCount(CurrentTurnPlayer);
+	BroadcastChatMessage(
+		NBPlayerState->GetPlayerInfoString() + TEXT(": 시간 초과 -> 기회 1회 소진")
+	);
+
+	const bool bGameEnded = JudgeGame(CurrentTurnPlayer, 0);
+	if (bGameEnded == false)
+	{
+		AdvanceTurn();
+	}
+}
+
+ANBPlayerController* ANBGameModeBase::GetCurrentTurnPlayer() const
+{
+	if (AllPlayerControllers.IsValidIndex(CurrentTurnPlayerIndex) == false)
+	{
+		return nullptr;
+	}
+
+	return AllPlayerControllers[CurrentTurnPlayerIndex];
 }
 
